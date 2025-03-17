@@ -5,7 +5,7 @@
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
 
-#define MAX_TRANSACTIONS 10  // Max chat messages per block
+#define MAX_TRANSACTIONS 100  // Max chat messages per block
 #define MESSAGE_SIZE 500
 #define BLOCKCHAIN_DIR "/blocks/"
 
@@ -15,7 +15,6 @@ const char *password = "12345678";
 DNSServer dnsServer;
 
 AsyncWebServer server(80);
-AsyncWebSocket ws("/ws");
 
 // Chat Message (Transaction)
 struct Transaction {
@@ -84,7 +83,7 @@ struct Block {
 };
 
 void saveBlockToFS(Block* block) {
-  String filePath = String(BLOCKCHAIN_DIR) + "block_" + String(block->index) + ".dat";
+  String filePath = String(BLOCKCHAIN_DIR) + "block_" + String(block->index-1) + ".dat";
   File file = LittleFS.open(filePath, "w");
   Serial.println(block->index);
   if (!file) {
@@ -174,35 +173,6 @@ void clearBlockchain() {
   Serial.println("Cleared Blockchain");
 }
 
-void onWSMessage(void *arg, uint8_t *data, size_t len) {
-  AwsFrameInfo *info = (AwsFrameInfo*)arg;
-  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
-    String message((char*)data, len);  // FIXED: Prevent out-of-bounds access
-
-    int firstSep = message.indexOf('\x1F');
-    int secondSep = message.indexOf('\x1F', firstSep + 1);
-    if (firstSep == -1 || secondSep == -1) return;
-
-    String sender = message.substring(0, firstSep);
-    String msg = message.substring(firstSep + 1, secondSep);
-    String group = message.substring(secondSep + 1);
-
-    addChatTransaction(sender, msg, group);
-    ws.textAll(message);
-  }
-}
-
-void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
-                      AwsEventType type, void *arg, uint8_t *data, size_t len) {
-  if (type == WS_EVT_DATA) {
-    onWSMessage(arg, data, len);
-  }
-}
-
-void setupWebSocket() {
-  ws.onEvent(onWebSocketEvent);
-  server.addHandler(&ws);
-}
 void handleNotFound(AsyncWebServerRequest *request) {
     request->redirect("http://192.168.4.1/");
 }
@@ -286,19 +256,21 @@ void setup() {
                       return id;
                   }
 
-                  function openInBrowser() {
-                      var url = "http://192.168.4.1/chat"; 
+                function openInBrowser() {
+                  var url = "http://192.168.4.1/chat";
 
-                      if (navigator.userAgent.toLowerCase().indexOf('android') > -1) {
-                          window.location.href = "intent://" + url.replace('http://', '') + 
-                              "#Intent;scheme=http;package=com.android.chrome;end;";
-                      } else if (navigator.userAgent.toLowerCase().indexOf('iphone') > -1 || 
-                                navigator.userAgent.toLowerCase().indexOf('ipad') > -1) {
-                          window.open(url, '_system');
-                      } else {
-                          window.open(url, '_blank'); 
-                      }
+                  if (navigator.userAgent.toLowerCase().indexOf('android') > -1) {
+                      window.location.href = "intent://" + url.replace("http://", "") +
+                          "/#Intent;scheme=http;package=com.android.chrome;end;";
+                  } else if (navigator.userAgent.toLowerCase().indexOf('iphone') > -1 || 
+                            navigator.userAgent.toLowerCase().indexOf('ipad') > -1) {
+                      setTimeout(function() {
+                          window.location.href = "http://192.168.4.1/chat";
+                      }, 500); // Delay to allow portal exit
+                  } else {
+                      window.location.href = url; // Normal case
                   }
+                }
 
                   document.getElementById("identifier").innerText = generateIdentifier();
               </script>
@@ -306,7 +278,7 @@ void setup() {
           </html>
       )rawliteral");
   });
-  server.on("/messages", HTTP_GET, [](AsyncWebServerRequest *request) {
+  server.on("/api/messages", HTTP_GET, [](AsyncWebServerRequest *request) {
     String group = "General";  // Default group
     if (request->hasParam("group")) {
         group = request->getParam("group")->value();
@@ -329,24 +301,29 @@ void setup() {
     request->send(200, "application/json", response);
   });
 
-  server.on("/messages", HTTP_POST, [](AsyncWebServerRequest *request) {
-      if (request->hasParam("sender", true) && request->hasParam("message", true) && request->hasParam("group", true)) {
-          String sender = request->getParam("sender", true)->value();
-          String message = request->getParam("message", true)->value();
-          String group = request->getParam("group", true)->value();
-          
-          addChatTransaction(sender, message, group);
-          request->send(200, "application/json", "{\"status\": \"ok\"}");
-      } else {
-          request->send(400, "application/json", "{\"error\": \"Missing parameters\"}");
-      }
+  server.on("/api/messages", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (request->hasParam("sender", true) && request->hasParam("message", true) && request->hasParam("group", true)) {
+        String sender = request->getParam("sender", true)->value();
+        String message = request->getParam("message", true)->value();
+        String group = request->getParam("group", true)->value();
+        
+        addChatTransaction(sender, message, group);
+        request->send(200, "application/json", "{\"status\": \"ok\"}");
+    } else {
+        request->send(400, "application/json", "{\"error\": \"Missing parameters\"}");
+    }
+  });
+  // Serve index.html when /chat is accessed
+  server.on("/chat", HTTP_GET, [](AsyncWebServerRequest *request) {
+      request->send(LittleFS, "/index.html", "text/html");
   });
 
-  server.on("/groups", HTTP_GET, [](AsyncWebServerRequest *request) {
-      request->send(200, "application/json", "[\"General\", \"Gaming\", \"Tech\", \"Random\"]");
-  });
+  // Serve all static files (JS, CSS, images, etc.) from React's build
+  server.serveStatic("/static", LittleFS, "/static");
+  server.serveStatic("/assets", LittleFS, "/assets");
+
+
   server.onNotFound(handleNotFound);
-  setupWebSocket();
   server.begin();
   Serial.println("Web Server Started at: " + String(WiFi.softAPIP()));
 }
