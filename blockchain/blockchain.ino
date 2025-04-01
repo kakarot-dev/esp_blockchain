@@ -1,6 +1,6 @@
 #include "FS.h"
 #include "LittleFS.h"
-#include "mbedtls/sha256.h" 
+#include "mbedtls/sha256.h"
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
@@ -49,16 +49,16 @@ struct Block {
     hash = calculateHash();
   }
 
-  bool addTransaction(String sender, String message, String group) {
+  bool addTransaction(String sender, String message, String group, String timestamp) {
     if (transactionCount < MAX_TRANSACTIONS) {
-      if (group == "") group = "General";
-      transactions[transactionCount] = Transaction(sender, message, String(millis()), group);
+      transactions[transactionCount] = Transaction(sender, message, timestamp, group);
       transactionCount++;
       hash = calculateHash();
       return true;
     }
     return false;
   }
+
 
   String calculateHash() {
     String data = String(index) + timestamp + previousHash;
@@ -70,7 +70,7 @@ struct Block {
     mbedtls_sha256_context ctx;
     mbedtls_sha256_init(&ctx);
     mbedtls_sha256_starts(&ctx, 0);
-    mbedtls_sha256_update(&ctx, (const unsigned char*)data.c_str(), data.length());
+    mbedtls_sha256_update(&ctx, (const unsigned char *)data.c_str(), data.length());
     mbedtls_sha256_finish(&ctx, hashResult);
     mbedtls_sha256_free(&ctx);
 
@@ -82,8 +82,8 @@ struct Block {
   }
 };
 
-void saveBlockToFS(Block* block) {
-  String filePath = String(BLOCKCHAIN_DIR) + "block_" + String(block->index-1) + ".dat";
+void saveBlockToFS(Block *block) {
+  String filePath = String(BLOCKCHAIN_DIR) + "block_" + String(block->index - 1) + ".dat";
   File file = LittleFS.open(filePath, "w");
   Serial.println(block->index);
   if (!file) {
@@ -95,10 +95,7 @@ void saveBlockToFS(Block* block) {
   file.println("PrevHash: " + block->previousHash);
   file.println("Timestamp: " + block->timestamp);
   for (int j = 0; j < block->transactionCount; j++) {
-    file.println("[" + block->transactions[j].timestamp + "] (" +
-                 block->transactions[j].group + ") " +
-                 block->transactions[j].sender + ": " +
-                 block->transactions[j].message);
+    file.println("[" + block->transactions[j].timestamp + "] (" + block->transactions[j].group + ") " + block->transactions[j].sender + ": " + block->transactions[j].message);
   }
   file.println("-----------------");
   file.close();
@@ -145,7 +142,7 @@ String getLastBlockHashFromFS(int index) {
   return lastHash;
 }
 
-Block* currentBlock;
+Block *currentBlock;
 void addBlock() {
   String prevHash = currentBlock ? currentBlock->hash : "0";
   saveBlockToFS(currentBlock);
@@ -153,12 +150,13 @@ void addBlock() {
   currentBlock = new Block(currentBlock->index + 1, prevHash);
 }
 
-void addChatTransaction(String sender, String message, String group) {
-  if (!currentBlock->addTransaction(sender, message, group)) {
+void addChatTransaction(String sender, String message, String group, String timestamp) {
+  if (!currentBlock->addTransaction(sender, message, group, timestamp)) {
     addBlock();
-    currentBlock->addTransaction(sender, message, group);
+    currentBlock->addTransaction(sender, message, group, timestamp);
   }
 }
+
 
 void clearBlockchain() {
   File root = LittleFS.open(BLOCKCHAIN_DIR);
@@ -174,7 +172,7 @@ void clearBlockchain() {
 }
 
 void handleNotFound(AsyncWebServerRequest *request) {
-    request->redirect("http://192.168.4.1/");
+  request->redirect("http://192.168.4.1/");
 }
 
 void setup() {
@@ -189,7 +187,7 @@ void setup() {
     Serial.println("LittleFS Initialization Failed!");
     return;
   }
-  
+
   int lastIndex = getLastBlockIndexFromFS();
   String lastHash = getLastBlockHashFromFS(lastIndex);
   currentBlock = new Block(lastIndex + 1, lastHash);
@@ -201,7 +199,7 @@ void setup() {
   dnsServer.start(53, "*", WiFi.softAPIP());
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-      request->send(200, "text/html", R"rawliteral(
+    request->send(200, "text/html", R"rawliteral(
           <!DOCTYPE html>
           <html>
           <head>
@@ -281,19 +279,19 @@ void setup() {
   server.on("/api/messages", HTTP_GET, [](AsyncWebServerRequest *request) {
     String group = "General";  // Default group
     if (request->hasParam("group")) {
-        group = request->getParam("group")->value();
+      group = request->getParam("group")->value();
     }
 
     String response = "[";
     for (int i = 0; i < currentBlock->transactionCount; i++) {
-        Transaction t = currentBlock->transactions[i];
-        if (t.group == group) {
-            response += "{";
-            response += "\"sender\":\"" + t.sender + "\",";
-            response += "\"message\":\"" + t.message + "\",";
-            response += "\"timestamp\":\"" + t.timestamp + "\"";
-            response += "},";
-        }
+      Transaction t = currentBlock->transactions[i];
+      if (t.group == group) {
+        response += "{";
+        response += "\"sender\":\"" + t.sender + "\",";
+        response += "\"message\":\"" + t.message + "\",";
+        response += "\"timestamp\":\"" + t.timestamp + "\"";
+        response += "},";
+      }
     }
     if (response.length() > 1) response.remove(response.length() - 1);  // Remove last comma
     response += "]";
@@ -302,20 +300,23 @@ void setup() {
   });
 
   server.on("/api/messages", HTTP_POST, [](AsyncWebServerRequest *request) {
-    if (request->hasParam("sender", true) && request->hasParam("message", true) && request->hasParam("group", true)) {
-        String sender = request->getParam("sender", true)->value();
-        String message = request->getParam("message", true)->value();
-        String group = request->getParam("group", true)->value();
-        
-        addChatTransaction(sender, message, group);
-        request->send(200, "application/json", "{\"status\": \"ok\"}");
+    if (request->hasParam("sender", true) && request->hasParam("message", true) && request->hasParam("group", true) && request->hasParam("timestamp", true)) {
+
+      String sender = request->getParam("sender", true)->value();
+      String message = request->getParam("message", true)->value();
+      String group = request->getParam("group", true)->value();
+      String timestamp = request->getParam("timestamp", true)->value();  // Use UI timestamp
+
+      addChatTransaction(sender, message, group, timestamp);
+      request->send(200, "application/json", "{\"status\": \"ok\"}");
     } else {
-        request->send(400, "application/json", "{\"error\": \"Missing parameters\"}");
+      request->send(400, "application/json", "{\"error\": \"Missing parameters\"}");
     }
   });
+
   // Serve index.html when /chat is accessed
   server.on("/chat", HTTP_GET, [](AsyncWebServerRequest *request) {
-      request->send(LittleFS, "/index.html", "text/html");
+    request->send(LittleFS, "/index.html", "text/html");
   });
 
   // Serve all static files (JS, CSS, images, etc.) from React's build

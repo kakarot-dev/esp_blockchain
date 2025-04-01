@@ -18,9 +18,20 @@ const App: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  function generateUUID() {
+    if (window.crypto && window.crypto.randomUUID) {
+      return window.crypto.randomUUID();
+    } else {
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      });
+    }
+  }
+  
   useEffect(() => {
-    const storedUsername = localStorage.getItem('chatUsername') || 
-      `User${Math.floor(Math.random() * 10000)}`;
+    const storedUsername = localStorage.getItem('chatUsername') || `User-${generateUUID().slice(0, 8)}`;
     setUsername(storedUsername);
     localStorage.setItem('chatUsername', storedUsername);
   }, []);
@@ -43,9 +54,20 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [currentGroup]);
 
-  useEffect(() => {
+useEffect(() => {
+  const messagesContainer = messagesEndRef.current?.parentElement;
+  if (!messagesContainer) return;
+
+  // Check if the user is near the bottom before scrolling
+  const isAtBottom =
+    messagesContainer.scrollHeight - messagesContainer.scrollTop <=
+    messagesContainer.clientHeight + 50; // Allow small buffer
+
+  if (isAtBottom) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }
+}, [messages]);
+
 
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
 
@@ -59,33 +81,36 @@ const App: React.FC = () => {
     e.preventDefault();
     if (!inputMessage.trim()) return;
 
-    try {
-      const formData = new URLSearchParams();
-      formData.append('sender', username);
-      formData.append('message', inputMessage);
-      formData.append('group', currentGroup);
+    const timestamp = new Date().toISOString(); // Get current UTC timestamp
 
-      await fetch('/api/messages', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: formData,
-      });
+    try {
+        const formData = new URLSearchParams();
+        formData.append('sender', username);
+        formData.append('message', inputMessage);
+        formData.append('group', currentGroup);
+        formData.append('timestamp', timestamp); // Send timestamp from UI
+
+        await fetch('/api/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: formData,
+        });
 
     } catch (error) {
-      console.error('Error sending message:', error);
+        console.error('Error sending message:', error);
     }
 
     setInputMessage('');
     inputRef.current?.focus();
-  };
+};
 
-  const formatTimestamp = (timestamp: string) => {
-    try {
-      return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch {
-      return '??:??';
-    }
-  };
+
+const formatTimestamp = (timestamp: string) => {
+  const date = new Date(timestamp);
+  if (isNaN(date.getTime())) return 'Invalid Time';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+};
+
 
   return (
     <div className="app-container">
